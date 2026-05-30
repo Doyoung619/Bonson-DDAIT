@@ -2,8 +2,10 @@ package com.dancecam.app
 
 import android.Manifest
 import android.app.Activity
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
@@ -23,7 +25,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
-import androidx.camera.video.FileOutputOptions
+import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
@@ -32,7 +34,6 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -51,6 +52,8 @@ class MainActivity : ComponentActivity() {
     private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private var pendingStartAfterProjection = false
     private var pendingRecordAfterPermissions = false
+    private var currentVideoUri: Uri? = null
+    private var currentAudioUri: Uri? = null
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -238,17 +241,34 @@ class MainActivity : ComponentActivity() {
         }
         startProjectionService()
 
-        val outputDir = File(getExternalFilesDir(Environment.DIRECTORY_MOVIES), "DanceCam").apply { mkdirs() }
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val videoFile = File(outputDir, "dancecam_$stamp.mp4")
-        val audioFile = File(outputDir, "dancecam_$stamp.wav")
+        val videoName = "dancecam_$stamp.mp4"
+        val audioName = "dancecam_$stamp.wav"
+        val audioUri = createAudioUri(audioName)
+        if (audioUri == null) {
+            setStatus("Error: Could not create audio file")
+            finishProjectionSession()
+            return
+        }
+        currentAudioUri = audioUri
 
         try {
-            playbackAudioRecorder = PlaybackAudioRecorder(projection, audioFile) { message ->
+            playbackAudioRecorder = PlaybackAudioRecorder(
+                projection,
+                {
+                    contentResolver.openOutputStream(audioUri, "w")
+                        ?: error("Could not open WAV output stream")
+                }
+            ) { message ->
                 runOnUiThread { setStatus("Error: $message") }
             }.also { it.start() }
 
-            val outputOptions = FileOutputOptions.Builder(videoFile).build()
+            val outputOptions = MediaStoreOutputOptions.Builder(
+                contentResolver,
+                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            )
+                .setContentValues(videoContentValues(videoName))
+                .build()
             recording = capture.output
                 .prepareRecording(this, outputOptions)
                 .start(ContextCompat.getMainExecutor(this)) { event ->
@@ -260,6 +280,8 @@ class MainActivity : ComponentActivity() {
                         }
                         is VideoRecordEvent.Finalize -> {
                             recording = null
+                            playbackAudioRecorder?.stop()
+                            playbackAudioRecorder = null
                             recordButton.text = "Record"
                             switchButton.visibility = View.VISIBLE
                             finishProjectionSession()
@@ -267,7 +289,8 @@ class MainActivity : ComponentActivity() {
                             if (event.hasError()) {
                                 setStatus("Error: Video save failed: ${event.error}")
                             } else {
-                                setStatus("Saved: ${videoFile.absolutePath}\nAudio: ${audioFile.absolutePath}")
+                                currentVideoUri = event.outputResults.outputUri
+                                setStatus("Saved: ${event.outputResults.outputUri}\nAudio: $audioUri")
                             }
                         }
                     }
@@ -282,10 +305,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopRecording() {
-        playbackAudioRecorder?.stop()
-        playbackAudioRecorder = null
         recording?.stop()
         if (recording == null) {
+            playbackAudioRecorder?.stop()
+            playbackAudioRecorder = null
             recordButton.text = "Record"
             switchButton.visibility = View.VISIBLE
             finishProjectionSession()
@@ -332,6 +355,29 @@ class MainActivity : ComponentActivity() {
 
     private fun stopProjectionService() {
         stopService(Intent(this, MediaProjectionForegroundService::class.java))
+    }
+
+    private fun videoContentValues(displayName: String): ContentValues {
+        return ContentValues().apply {
+            put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, displayName)
+            put(android.provider.MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/DanceCam")
+        }
+    }
+
+    private fun audioContentValues(displayName: String): ContentValues {
+        return ContentValues().apply {
+            put(android.provider.MediaStore.Audio.Media.DISPLAY_NAME, displayName)
+            put(android.provider.MediaStore.Audio.Media.MIME_TYPE, "audio/wav")
+            put(android.provider.MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/DanceCam")
+        }
+    }
+
+    private fun createAudioUri(displayName: String): Uri? {
+        return contentResolver.insert(
+            android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            audioContentValues(displayName)
+        )
     }
 
     private fun finishProjectionSession() {

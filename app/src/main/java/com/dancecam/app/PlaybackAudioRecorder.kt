@@ -5,9 +5,9 @@ import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
-import java.io.File
-import java.io.FileOutputStream
-import java.io.RandomAccessFile
+import java.io.OutputStream
+import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -15,7 +15,7 @@ import kotlin.concurrent.thread
 
 class PlaybackAudioRecorder(
     private val mediaProjection: MediaProjection,
-    private val outputFile: File,
+    private val outputStreamProvider: () -> OutputStream,
     private val onError: (String) -> Unit
 ) {
     private val isRecording = AtomicBoolean(false)
@@ -74,9 +74,8 @@ class PlaybackAudioRecorder(
         dataBytesWritten = 0L
 
         try {
-            outputFile.parentFile?.mkdirs()
-            FileOutputStream(outputFile).use { stream ->
-                stream.write(ByteArray(WAV_HEADER_SIZE))
+            val pcmBuffer = ByteArrayOutputStream()
+            BufferedOutputStream(pcmBuffer).use { stream ->
                 record.startRecording()
 
                 while (isRecording.get()) {
@@ -90,20 +89,16 @@ class PlaybackAudioRecorder(
                     }
                 }
             }
-            patchWavHeader(outputFile, dataBytesWritten)
+            outputStreamProvider().use { output ->
+                output.write(wavHeader(dataBytesWritten))
+                pcmBuffer.writeTo(output)
+            }
         } catch (error: SecurityException) {
             onError("Playback audio permission denied: ${error.message}")
         } catch (error: Exception) {
             onError("Playback audio capture failed: ${error.message}")
         } finally {
             isRecording.set(false)
-        }
-    }
-
-    private fun patchWavHeader(file: File, pcmDataSize: Long) {
-        RandomAccessFile(file, "rw").use { wav ->
-            wav.seek(0)
-            wav.write(wavHeader(pcmDataSize))
         }
     }
 

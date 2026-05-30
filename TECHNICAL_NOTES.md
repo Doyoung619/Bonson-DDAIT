@@ -22,8 +22,10 @@ The app requests `RECORD_AUDIO` because `AudioRecord` requires the permission, b
 
 v0 saves two files:
 
-- `dancecam_<timestamp>.mp4`: camera video-only MP4 from CameraX Recorder.
-- `dancecam_<timestamp>.wav`: internal playback PCM audio written as WAV.
+- `dancecam_<timestamp>.mp4`: camera video-only MP4 from CameraX Recorder, saved with MediaStore under `Movies/DanceCam`.
+- `dancecam_<timestamp>.wav`: internal playback PCM audio written as WAV, saved with MediaStore under `Music/DanceCam`.
+
+The WAV writer buffers PCM in memory in v0 so it can write a valid WAV header with the final data size. This keeps the implementation simple for short manual tests, but longer recordings should move to a file-backed writer or a seekable app-specific temp file before publishing to MediaStore.
 
 TODO for a later version:
 

@@ -9,8 +9,8 @@ This v0 targets Android 10+ only because playback capture requires Android Q / A
 - Shows a full-screen portrait CameraX preview.
 - Starts with the back camera and includes a simple front/back switch.
 - Requests camera, audio, and MediaProjection consent.
-- Saves a camera video-only MP4.
-- Saves captured internal playback audio as a WAV file.
+- Saves a camera video-only MP4 to `Movies/DanceCam`.
+- Saves captured internal playback audio as a WAV file to `Music/DanceCam`.
 - Shows status text: `Ready`, `Recording`, `Saved: <path>`, or `Error: <message>`.
 
 ## Build With GitHub Actions
@@ -48,13 +48,15 @@ No Android Studio, local Android SDK, USB, or adb is required.
 6. Approve the Android playback-capture consent dialog.
 7. Dance.
 8. Press **Stop**.
-9. Check the saved MP4 and WAV paths shown on screen.
+9. Check the saved MP4 and WAV URIs shown on screen.
+10. Open Gallery or Files and look under `Movies/DanceCam` and `Music/DanceCam`.
 
 The MP4 is camera video only. The WAV should contain capturable internal playback audio without external room noise.
 
 ## Known Limitations
 
 - v0 does not mux the WAV into the MP4 yet.
+- v0 buffers WAV audio in memory before saving, so keep first tests short.
 - Some apps block playback capture, so their audio may be silent.
 - Audio capture requires explicit Android MediaProjection consent.
 - The debug APK is unsigned for release and intended for manual testing only.
