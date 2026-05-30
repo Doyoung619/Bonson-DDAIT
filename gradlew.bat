@@ -17,13 +17,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$version=[regex]::Match($url,'gradle-([^-]+)-bin\.zip').Groups[1].Value;" ^
   "if (-not $version) { throw 'Gradle version not found' }" ^
   "$cache=Join-Path '%APP_HOME%.gradle\wrapper\dists' ('gradle-' + $version + '-bin');" ^
-  "$home=Join-Path $cache ('gradle-' + $version);" ^
+  "$gradleHome=Join-Path $cache ('gradle-' + $version);" ^
   "$zip=Join-Path $cache ('gradle-' + $version + '-bin.zip');" ^
-  "if (!(Test-Path (Join-Path $home 'bin\gradle.bat'))) {" ^
+  "if (!(Test-Path (Join-Path $gradleHome 'bin\gradle.bat'))) {" ^
   "  New-Item -ItemType Directory -Force -Path $cache | Out-Null;" ^
   "  if (!(Test-Path $zip)) { Invoke-WebRequest -Uri $url -OutFile $zip };" ^
   "  Expand-Archive -LiteralPath $zip -DestinationPath $cache -Force;" ^
   "}" ^
-  "& (Join-Path $home 'bin\gradle.bat') %*"
+  "& (Join-Path $gradleHome 'bin\gradle.bat') %*"
 
 exit /b %ERRORLEVEL%

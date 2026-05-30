@@ -91,12 +91,18 @@ class MainActivity : ComponentActivity() {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             startProjectionService()
-            mediaProjection = mediaProjectionManager.getMediaProjection(result.resultCode, result.data!!).also {
-                it.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
-            }
-            if (pendingStartAfterProjection) {
+            val projection = mediaProjectionManager.getMediaProjection(result.resultCode, result.data!!)
+            if (projection == null) {
                 pendingStartAfterProjection = false
-                startRecording()
+                stopProjectionService()
+                setStatus("Error: Playback capture permission is not ready")
+            } else {
+                projection.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
+                mediaProjection = projection
+                if (pendingStartAfterProjection) {
+                    pendingStartAfterProjection = false
+                    startRecording()
+                }
             }
         } else {
             pendingStartAfterProjection = false
