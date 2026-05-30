@@ -20,21 +20,21 @@ The app requests `RECORD_AUDIO` because `AudioRecord` requires the permission, b
 
 ## Current Muxing Status
 
-v0 saves two files:
+v0 writes temporary files during recording:
 
-- `dancecam_<timestamp>.mp4`: camera video-only MP4 from CameraX Recorder, saved with MediaStore under `Movies/DanceCam`.
-- `dancecam_<timestamp>.wav`: internal playback PCM audio written as WAV, saved with MediaStore under `Music/DanceCam`.
+- `dancecam_<timestamp>_video.mp4`: camera video-only MP4 from CameraX Recorder in app cache.
+- `dancecam_<timestamp>_audio.wav`: internal playback PCM audio in app cache.
 
-The WAV writer buffers PCM in memory in v0 so it can write a valid WAV header with the final data size. This keeps the implementation simple for short manual tests, but longer recordings should move to a file-backed writer or a seekable app-specific temp file before publishing to MediaStore.
+After recording stops, `VideoAudioMuxer` encodes WAV PCM to AAC with `MediaCodec`, copies the original video track with `MediaExtractor`, and writes one final MP4 with `MediaMuxer` to `Movies/DanceCam`.
 
 TODO for a later version:
 
-- Convert or encode WAV PCM to an MP4-compatible audio track, usually AAC.
-- Mux the camera MP4 video track and encoded audio track into one MP4.
-- Use Android `MediaExtractor`, `MediaCodec`, and `MediaMuxer`, or add a carefully licensed FFmpeg-based pipeline.
-- Preserve timestamps so camera video and internal audio stay synchronized.
+- Improve timestamp alignment between CameraX video start and AudioRecord start.
+- Move muxing to a foreground worker for longer recordings.
+- Add a clearer post-recording progress indicator.
+- Optionally keep a debug WAV export switch.
 
-The fallback is deliberate so the current app remains buildable and testable without introducing fragile media muxing code in v0.
+The current muxing path is intentionally simple and designed for short manual tests first.
 
 ## Next Steps For AI Auto-Framing
 

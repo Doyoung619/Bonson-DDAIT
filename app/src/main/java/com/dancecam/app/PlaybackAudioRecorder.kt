@@ -5,9 +5,9 @@ import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
-import java.io.OutputStream
-import java.io.BufferedOutputStream
-import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicBoolean
@@ -15,7 +15,7 @@ import kotlin.concurrent.thread
 
 class PlaybackAudioRecorder(
     private val mediaProjection: MediaProjection,
-    private val outputStreamProvider: () -> OutputStream,
+    private val outputFile: File,
     private val onError: (String) -> Unit
 ) {
     private val isRecording = AtomicBoolean(false)
@@ -63,7 +63,7 @@ class PlaybackAudioRecorder(
             audioRecord?.stop()
         } catch (_: IllegalStateException) {
         }
-        worker?.join(1500)
+        worker?.join(3000)
         audioRecord?.release()
         audioRecord = null
         worker = null
@@ -74,8 +74,9 @@ class PlaybackAudioRecorder(
         dataBytesWritten = 0L
 
         try {
-            val pcmBuffer = ByteArrayOutputStream()
-            BufferedOutputStream(pcmBuffer).use { stream ->
+            outputFile.parentFile?.mkdirs()
+            FileOutputStream(outputFile).use { stream ->
+                stream.write(ByteArray(WAV_HEADER_SIZE))
                 record.startRecording()
 
                 while (isRecording.get()) {
@@ -89,16 +90,20 @@ class PlaybackAudioRecorder(
                     }
                 }
             }
-            outputStreamProvider().use { output ->
-                output.write(wavHeader(dataBytesWritten))
-                pcmBuffer.writeTo(output)
-            }
+            patchWavHeader(outputFile, dataBytesWritten)
         } catch (error: SecurityException) {
             onError("Playback audio permission denied: ${error.message}")
         } catch (error: Exception) {
             onError("Playback audio capture failed: ${error.message}")
         } finally {
             isRecording.set(false)
+        }
+    }
+
+    private fun patchWavHeader(file: File, pcmDataSize: Long) {
+        RandomAccessFile(file, "rw").use { wav ->
+            wav.seek(0)
+            wav.write(wavHeader(pcmDataSize))
         }
     }
 
@@ -126,9 +131,9 @@ class PlaybackAudioRecorder(
     }
 
     companion object {
-        private const val SAMPLE_RATE = 44100
-        private const val CHANNEL_COUNT = 2
-        private const val BYTES_PER_SAMPLE = 2
+        const val SAMPLE_RATE = 44100
+        const val CHANNEL_COUNT = 2
+        const val BYTES_PER_SAMPLE = 2
         private const val WAV_HEADER_SIZE = 44
     }
 }

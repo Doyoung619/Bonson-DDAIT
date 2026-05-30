@@ -2,14 +2,11 @@ package com.dancecam.app
 
 import android.Manifest
 import android.app.Activity
-import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -25,7 +22,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
-import androidx.camera.video.MediaStoreOutputOptions
+import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
 import androidx.camera.video.Recorder
@@ -34,6 +31,7 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -52,8 +50,6 @@ class MainActivity : ComponentActivity() {
     private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private var pendingStartAfterProjection = false
     private var pendingRecordAfterPermissions = false
-    private var currentVideoUri: Uri? = null
-    private var currentAudioUri: Uri? = null
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -118,7 +114,7 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
         buildUi()
-        setStatus("Ready")
+        showReadyNotice()
 
         if (hasRequiredPermissions()) {
             startCamera()
@@ -182,6 +178,7 @@ class MainActivity : ComponentActivity() {
             FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
         )
         setContentView(root)
+        setStatus("Ready\nIf Record does not start while music is already playing, press Record first, approve capture, then resume music.")
     }
 
     private fun ensureReadyThenRecord() {
@@ -222,11 +219,15 @@ class MainActivity : ComponentActivity() {
 
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(this, cameraSelector, preview, videoCapture)
-                setStatus("Ready")
+                showReadyNotice()
             } catch (error: Exception) {
                 setStatus("Error: Camera start failed: ${error.message}")
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun showReadyNotice() {
+        setStatus("Ready\nIf music is already playing and Record fails, press Record first, approve capture, then resume music.")
     }
 
     private fun startRecording() {
@@ -242,33 +243,17 @@ class MainActivity : ComponentActivity() {
         startProjectionService()
 
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val videoName = "dancecam_$stamp.mp4"
-        val audioName = "dancecam_$stamp.wav"
-        val audioUri = createAudioUri(audioName)
-        if (audioUri == null) {
-            setStatus("Error: Could not create audio file")
-            finishProjectionSession()
-            return
-        }
-        currentAudioUri = audioUri
+        val workDir = File(cacheDir, "recordings").apply { mkdirs() }
+        val videoFile = File(workDir, "dancecam_${stamp}_video.mp4")
+        val audioFile = File(workDir, "dancecam_${stamp}_audio.wav")
+        val finalName = "dancecam_$stamp.mp4"
 
         try {
-            playbackAudioRecorder = PlaybackAudioRecorder(
-                projection,
-                {
-                    contentResolver.openOutputStream(audioUri, "w")
-                        ?: error("Could not open WAV output stream")
-                }
-            ) { message ->
+            playbackAudioRecorder = PlaybackAudioRecorder(projection, audioFile) { message ->
                 runOnUiThread { setStatus("Error: $message") }
             }.also { it.start() }
 
-            val outputOptions = MediaStoreOutputOptions.Builder(
-                contentResolver,
-                android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            )
-                .setContentValues(videoContentValues(videoName))
-                .build()
+            val outputOptions = FileOutputOptions.Builder(videoFile).build()
             recording = capture.output
                 .prepareRecording(this, outputOptions)
                 .start(ContextCompat.getMainExecutor(this)) { event ->
@@ -289,8 +274,7 @@ class MainActivity : ComponentActivity() {
                             if (event.hasError()) {
                                 setStatus("Error: Video save failed: ${event.error}")
                             } else {
-                                currentVideoUri = event.outputResults.outputUri
-                                setStatus("Saved: ${event.outputResults.outputUri}\nAudio: $audioUri")
+                                muxAndSave(videoFile, audioFile, finalName)
                             }
                         }
                     }
@@ -357,27 +341,26 @@ class MainActivity : ComponentActivity() {
         stopService(Intent(this, MediaProjectionForegroundService::class.java))
     }
 
-    private fun videoContentValues(displayName: String): ContentValues {
-        return ContentValues().apply {
-            put(android.provider.MediaStore.Video.Media.DISPLAY_NAME, displayName)
-            put(android.provider.MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-            put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/DanceCam")
-        }
-    }
-
-    private fun audioContentValues(displayName: String): ContentValues {
-        return ContentValues().apply {
-            put(android.provider.MediaStore.Audio.Media.DISPLAY_NAME, displayName)
-            put(android.provider.MediaStore.Audio.Media.MIME_TYPE, "audio/wav")
-            put(android.provider.MediaStore.Audio.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MUSIC}/DanceCam")
-        }
-    }
-
-    private fun createAudioUri(displayName: String): Uri? {
-        return contentResolver.insert(
-            android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            audioContentValues(displayName)
-        )
+    private fun muxAndSave(videoFile: File, audioFile: File, finalName: String) {
+        recordButton.isEnabled = false
+        setStatus("Saving...")
+        Thread {
+            try {
+                val outputUri = VideoAudioMuxer(contentResolver).muxToMovies(videoFile, audioFile, finalName)
+                runOnUiThread {
+                    recordButton.isEnabled = true
+                    setStatus("Saved: $outputUri\nLocation: Movies/DanceCam/$finalName")
+                }
+            } catch (error: Exception) {
+                runOnUiThread {
+                    recordButton.isEnabled = true
+                    setStatus("Error: Mux failed: ${error.message}")
+                }
+            } finally {
+                videoFile.delete()
+                audioFile.delete()
+            }
+        }.start()
     }
 
     private fun finishProjectionSession() {
