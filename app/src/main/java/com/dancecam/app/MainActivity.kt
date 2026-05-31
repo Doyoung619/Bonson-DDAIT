@@ -20,9 +20,10 @@ import android.widget.SeekBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
 import androidx.camera.core.Camera
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.FileOutputOptions
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var switchButton: Button
     private lateinit var zoomOutButton: Button
     private lateinit var zoomInButton: Button
+    private lateinit var aiFollowButton: Button
     private lateinit var zoomSeekBar: SeekBar
     private lateinit var mediaProjectionManager: MediaProjectionManager
 
@@ -54,11 +56,13 @@ class MainActivity : ComponentActivity() {
     private var recording: Recording? = null
     private var playbackAudioRecorder: PlaybackAudioRecorder? = null
     private var mediaProjection: MediaProjection? = null
+    private var aiFollowAnalyzer: AiFollowAnalyzer? = null
     private var cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
     private var pendingStartAfterProjection = false
     private var pendingRecordAfterPermissions = false
     private var isStoppingRecording = false
     private var isSaving = false
+    private var aiFollowEnabled = false
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -77,8 +81,10 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val cameraGranted = permissions[Manifest.permission.CAMERA] == true || hasPermission(Manifest.permission.CAMERA)
-        val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] == true || hasPermission(Manifest.permission.RECORD_AUDIO)
+        val cameraGranted = permissions[Manifest.permission.CAMERA] == true ||
+            hasPermission(Manifest.permission.CAMERA)
+        val audioGranted = permissions[Manifest.permission.RECORD_AUDIO] == true ||
+            hasPermission(Manifest.permission.RECORD_AUDIO)
 
         if (cameraGranted && audioGranted) {
             startCamera()
@@ -90,7 +96,7 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             pendingRecordAfterPermissions = false
-            setStatus("⚠️ 카메라와 오디오 캡처 권한이 필요합니다.")
+            setStatus("! 카메라와 오디오 캡처 권한이 필요합니다.")
         }
     }
 
@@ -100,14 +106,15 @@ class MainActivity : ComponentActivity() {
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             if (!startProjectionService()) {
                 pendingStartAfterProjection = false
-                setStatus("⚠️ 녹화 준비 실패. 알림 권한을 허용한 뒤 다시 시도해주세요.")
+                setStatus("! 녹화 준비 실패. 알림 권한을 허용한 뒤 다시 시도해주세요.")
                 return@registerForActivityResult
             }
+
             val projection = mediaProjectionManager.getMediaProjection(result.resultCode, result.data!!)
             if (projection == null) {
                 pendingStartAfterProjection = false
                 stopProjectionService()
-                setStatus("⚠️ 오디오 캡처 권한이 준비되지 않았습니다.")
+                setStatus("! 오디오 캡처 권한이 준비되지 않았습니다.")
             } else {
                 projection.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
                 mediaProjection = projection
@@ -118,15 +125,12 @@ class MainActivity : ComponentActivity() {
             }
         } else {
             pendingStartAfterProjection = false
-            setStatus("⚠️ 오디오 캡처 권한이 취소되었습니다.")
+            setStatus("! 오디오 캡처 권한이 취소되었습니다.")
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        Thread.setDefaultUncaughtExceptionHandler { _, error ->
-            runOnUiThread { setStatus("⚠️ 오류가 발생했습니다: ${error.message ?: "알 수 없는 오류"}") }
-        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         mediaProjectionManager = getSystemService(MediaProjectionManager::class.java)
         buildUi()
@@ -142,6 +146,8 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         stopRecording()
         finishProjectionSession()
+        aiFollowAnalyzer?.close()
+        aiFollowAnalyzer = null
         super.onDestroy()
     }
 
@@ -159,14 +165,10 @@ class MainActivity : ComponentActivity() {
         }
 
         recordButton = Button(this).apply {
-            text = "●"
-            textSize = 28f
+            text = "REC"
+            textSize = 18f
             setOnClickListener {
-                if (recording == null) {
-                    ensureReadyThenRecord()
-                } else {
-                    stopRecording()
-                }
+                if (recording == null) ensureReadyThenRecord() else stopRecording()
             }
         }
 
@@ -176,8 +178,18 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { switchCamera() }
         }
 
+        aiFollowButton = Button(this).apply {
+            text = "AI OFF"
+            textSize = 13f
+            setOnClickListener {
+                aiFollowEnabled = !aiFollowEnabled
+                updateAiFollowButton()
+                startCamera()
+            }
+        }
+
         zoomOutButton = Button(this).apply {
-            text = "−"
+            text = "-"
             textSize = 24f
             setOnClickListener { adjustZoom(-0.08f) }
         }
@@ -216,6 +228,7 @@ class MainActivity : ComponentActivity() {
             setPadding(24, 0, 24, 48)
             addView(switchButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(recordButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f))
+            addView(aiFollowButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
 
         val bottomPanel = LinearLayout(this).apply {
@@ -228,14 +241,21 @@ class MainActivity : ComponentActivity() {
         root.addView(previewView, FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
         root.addView(
             statusText,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP)
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP
+            )
         )
         root.addView(
             bottomPanel,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM)
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            )
         )
         setContentView(root)
-        showReadyNotice()
     }
 
     private fun ensureReadyThenRecord() {
@@ -258,7 +278,7 @@ class MainActivity : ComponentActivity() {
             projectionLauncher.launch(mediaProjectionManager.createScreenCaptureIntent())
         } catch (error: Exception) {
             pendingStartAfterProjection = false
-            setStatus("⚠️ 캡처 권한 요청 실패: ${error.message}")
+            setStatus("! 캡처 권한 요청 실패: ${error.message}")
         }
     }
 
@@ -280,34 +300,61 @@ class MainActivity : ComponentActivity() {
                     .build()
                 videoCapture = VideoCapture.withOutput(recorder)
                 videoCapture?.targetRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+                val imageAnalysis = buildAiFollowAnalysis()
 
                 cameraProvider.unbindAll()
-                camera = cameraProvider.bindToLifecycle(this, cameraSelector, preview, videoCapture)
+                camera = if (imageAnalysis == null) {
+                    cameraProvider.bindToLifecycle(this, cameraSelector, preview, videoCapture)
+                } else {
+                    cameraProvider.bindToLifecycle(this, cameraSelector, preview, videoCapture, imageAnalysis)
+                }
                 zoomSeekBar.progress = 0
                 setZoom(0f)
                 showReadyNotice()
             } catch (error: Exception) {
-                setStatus("⚠️ 카메라 시작 실패: ${error.message}")
+                setStatus("! 카메라 시작 실패: ${error.message}")
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
+    private fun buildAiFollowAnalysis(): ImageAnalysis? {
+        aiFollowAnalyzer?.close()
+        aiFollowAnalyzer = null
+        if (!aiFollowEnabled) return null
+
+        val analyzer = AiFollowAnalyzer { suggestedZoom ->
+            runOnUiThread {
+                if (aiFollowEnabled && recording != null && !isStoppingRecording) {
+                    val progress = (suggestedZoom * 100).toInt().coerceIn(0, 100)
+                    zoomSeekBar.progress = progress
+                    setZoom(progress / 100f)
+                }
+            }
+        }
+        aiFollowAnalyzer = analyzer
+        return ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .build()
+            .also { it.setAnalyzer(ContextCompat.getMainExecutor(this), analyzer) }
+    }
+
     private fun showReadyNotice() {
-        setStatus("✅ 준비 완료\n음악이 켜진 상태에서 녹화가 안 되면 녹화 버튼 → 캡처 승인 → 음악 재생 순서로 해주세요.")
+        val aiText = if (aiFollowEnabled) "AI Follow 켜짐" else "AI Follow 꺼짐"
+        setStatus("준비 완료 · $aiText\nAI Follow는 녹화 중 사람이 가장자리로 가면 자동으로 넓게 잡습니다.")
     }
 
     private fun startRecording() {
         val capture = videoCapture ?: run {
-            setStatus("⚠️ 카메라가 아직 준비되지 않았습니다.")
+            setStatus("! 카메라가 아직 준비되지 않았습니다.")
             finishProjectionSession()
             return
         }
         val projection = mediaProjection ?: run {
-            setStatus("⚠️ 오디오 캡처 권한이 준비되지 않았습니다.")
+            setStatus("! 오디오 캡처 권한이 준비되지 않았습니다.")
             return
         }
         if (!startProjectionService()) {
-            setStatus("⚠️ 녹화 준비 실패. 앱 알림 권한을 허용한 뒤 다시 시도해주세요.")
+            setStatus("! 녹화 준비 실패. 알림 권한을 허용한 뒤 다시 시도해주세요.")
             finishProjectionSession()
             return
         }
@@ -317,12 +364,16 @@ class MainActivity : ComponentActivity() {
         val workDir = File(cacheDir, "recordings").apply { mkdirs() }
         val videoFile = File(workDir, "dancecam_${stamp}_video.mp4")
         val audioFile = File(workDir, "dancecam_${stamp}_audio.wav")
-        val finalName = "dancecam_$stamp.mp4"
+        val finalName = if (aiFollowEnabled) {
+            "dancecam_${stamp}_ai_follow.mp4"
+        } else {
+            "dancecam_$stamp.mp4"
+        }
 
         try {
             isStoppingRecording = false
             playbackAudioRecorder = PlaybackAudioRecorder(projection, audioFile) { message ->
-                runOnUiThread { setStatus("⚠️ 오디오 오류: $message") }
+                runOnUiThread { setStatus("! 오디오 오류: $message") }
             }.also { it.start() }
 
             val outputOptions = FileOutputOptions.Builder(videoFile).build()
@@ -331,21 +382,23 @@ class MainActivity : ComponentActivity() {
                 .start(ContextCompat.getMainExecutor(this)) { event ->
                     when (event) {
                         is VideoRecordEvent.Start -> {
-                            recordButton.text = "■"
+                            recordButton.text = "STOP"
                             switchButton.visibility = View.GONE
-                            setStatus("● 녹화 중")
+                            aiFollowButton.isEnabled = false
+                            setStatus(if (aiFollowEnabled) "녹화 중 · AI Follow 작동 중" else "녹화 중")
                         }
                         is VideoRecordEvent.Finalize -> {
                             recording = null
                             isStoppingRecording = false
                             playbackAudioRecorder?.stop()
                             playbackAudioRecorder = null
-                            recordButton.text = "●"
+                            recordButton.text = "REC"
                             switchButton.visibility = View.VISIBLE
+                            aiFollowButton.isEnabled = true
                             finishProjectionSession()
 
                             if (event.hasError()) {
-                                setStatus("⚠️ 영상 저장 실패: ${event.error}")
+                                setStatus("! 영상 저장 실패: ${event.error}")
                             } else {
                                 muxAndSave(videoFile, audioFile, finalName)
                             }
@@ -354,23 +407,24 @@ class MainActivity : ComponentActivity() {
                 }
         } catch (error: SecurityException) {
             cleanupAfterStartFailure()
-            setStatus("⚠️ 권한 오류: ${error.message}")
+            setStatus("! 권한 오류: ${error.message}")
         } catch (error: Exception) {
             cleanupAfterStartFailure()
-            setStatus("⚠️ 녹화 시작 실패: ${error.message}")
+            setStatus("! 녹화 시작 실패: ${error.message}")
         }
     }
 
     private fun stopRecording() {
         if (isStoppingRecording || isSaving) return
         isStoppingRecording = true
-        setStatus("⏳ 저장 준비 중...")
+        setStatus("저장 준비 중...")
         recording?.stop()
         if (recording == null) {
             playbackAudioRecorder?.stop()
             playbackAudioRecorder = null
-            recordButton.text = "●"
+            recordButton.text = "REC"
             switchButton.visibility = View.VISIBLE
+            aiFollowButton.isEnabled = true
             finishProjectionSession()
             isStoppingRecording = false
         }
@@ -382,8 +436,9 @@ class MainActivity : ComponentActivity() {
         recording?.stop()
         recording = null
         isStoppingRecording = false
-        recordButton.text = "●"
+        recordButton.text = "REC"
         switchButton.visibility = View.VISIBLE
+        aiFollowButton.isEnabled = true
         finishProjectionSession()
     }
 
@@ -394,6 +449,11 @@ class MainActivity : ComponentActivity() {
             CameraSelector.DEFAULT_BACK_CAMERA
         }
         startCamera()
+    }
+
+    private fun updateAiFollowButton() {
+        aiFollowButton.text = if (aiFollowEnabled) "AI ON" else "AI OFF"
+        showReadyNotice()
     }
 
     private fun requestRequiredPermissions() {
@@ -431,20 +491,20 @@ class MainActivity : ComponentActivity() {
     private fun muxAndSave(videoFile: File, audioFile: File, finalName: String) {
         isSaving = true
         recordButton.isEnabled = false
-        setStatus("⏳ 저장 중입니다...")
+        setStatus("저장 중입니다...")
         Thread {
             try {
-                val outputUri = VideoAudioMuxer(contentResolver).muxToMovies(videoFile, audioFile, finalName)
+                VideoAudioMuxer(contentResolver).muxToMovies(videoFile, audioFile, finalName)
                 runOnUiThread {
                     isSaving = false
                     recordButton.isEnabled = true
-                    setStatus("✅ 저장되었습니다!\n갤러리의 DanceCam 폴더에서 확인하세요.")
+                    setStatus("저장되었습니다!\n갤러리의 DanceCam 폴더에서 확인하세요.")
                 }
             } catch (error: Exception) {
                 runOnUiThread {
                     isSaving = false
                     recordButton.isEnabled = true
-                    setStatus("⚠️ 저장 실패: ${error.message}")
+                    setStatus("! 저장 실패: ${error.message}")
                 }
             } finally {
                 videoFile.delete()

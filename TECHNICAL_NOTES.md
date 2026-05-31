@@ -38,10 +38,18 @@ The current muxing path is intentionally simple and designed for short manual te
 
 ## Next Steps For AI Auto-Framing
 
-Later versions can add on-device pose or person tracking to improve dance framing:
+The current app includes an AI Follow beta:
 
-- Add an analysis pipeline using CameraX `ImageAnalysis`.
-- Run a lightweight pose detector or person detector on preview frames.
+- CameraX `ImageAnalysis` receives preview frames while recording.
+- ML Kit Pose Detection estimates body landmarks on-device.
+- If landmarks approach the frame edge, the app lowers CameraX digital zoom to keep more of the dancer visible.
+- If the dancer is centered and far away, the app can gently zoom in.
+- The normal recording and internal playback-audio muxing path remains unchanged, so the final MP4 still contains the captured background playback audio.
+
+Later versions can add true post-recording reframing:
+
+- Analyze the final recording or sampled frames after capture.
 - Estimate dancer position and motion over time.
-- Provide framing guidance, zoom hints, or crop recommendations after recording.
+- Compute a smooth crop window for vertical output.
+- Re-encode a separate AI-edited MP4 while preserving the muxed audio track.
 - Keep any AI processing on-device unless the user explicitly opts into cloud processing.
