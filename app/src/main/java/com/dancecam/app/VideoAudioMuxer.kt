@@ -50,8 +50,12 @@ class VideoAudioMuxer(private val contentResolver: ContentResolver) {
             val sourceVideoTrack = findTrack(extractor, "video/")
             if (sourceVideoTrack < 0) error("No video track found")
             extractor.selectTrack(sourceVideoTrack)
+            val sourceVideoFormat = extractor.getTrackFormat(sourceVideoTrack)
+            if (sourceVideoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                muxer.setOrientationHint(sourceVideoFormat.getInteger(MediaFormat.KEY_ROTATION))
+            }
 
-            val muxVideoTrack = muxer.addTrack(extractor.getTrackFormat(sourceVideoTrack))
+            val muxVideoTrack = muxer.addTrack(sourceVideoFormat)
             val muxAudioTrack = if (audioSamples.format != null && audioSamples.samples.isNotEmpty()) {
                 muxer.addTrack(audioSamples.format)
             } else {
