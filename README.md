@@ -8,10 +8,10 @@ This v0 targets Android 10+ only because playback capture requires Android Q / A
 
 - Shows a full-screen portrait CameraX preview.
 - Starts with the back camera and includes a simple front/back switch.
+- Supports portrait/landscape capture mode from an in-app button.
 - Requests camera, audio, and MediaProjection consent.
 - Saves a merged MP4 to `Movies/DanceCam`.
-- Includes an optional AI Follow beta that uses pose detection during recording to zoom wider when the dancer approaches the edge of the frame.
-- Shows status text: `Ready`, `Recording`, `Saved: <path>`, or `Error: <message>`.
+- Shows simple Korean status text such as ready, recording, saving, and saved.
 
 ## Build With GitHub Actions
 
@@ -53,17 +53,10 @@ No Android Studio, local Android SDK, USB, or adb is required.
 
 The MP4 should contain camera video plus capturable internal playback audio without external room noise.
 
-## AI Follow Beta
-
-Tap **AI OFF** to switch it to **AI ON** before recording. While recording, DanceCam uses on-device ML Kit pose detection on preview frames. If the person moves near the edge of the frame, the app reduces digital zoom to keep more of the body in frame. If the person is centered and far away, it may gently zoom in.
-
-The saved MP4 still includes the captured internal playback audio. This beta is not a full post-recording crop/reframe editor yet; it is the first stable step toward that feature.
-
 ## Known Limitations
 
 - v0 muxes temporary video and WAV audio into one MP4 after pressing Stop.
 - Keep first tests short because v0 still does simple local post-processing after recording.
-- AI Follow is a beta live-framing feature. It depends on pose detection visibility and works best when the full body is visible.
 - If Record does not start correctly while music is already playing, press Record first, approve Android capture, then resume music from the notification shade or music app. This is shown in the app because Android's MediaProjection consent flow can interrupt already-playing media.
 - Some apps block playback capture, so their audio may be silent.
 - Audio capture requires explicit Android MediaProjection consent.

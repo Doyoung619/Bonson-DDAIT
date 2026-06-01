@@ -38,15 +38,7 @@ The current muxing path is intentionally simple and designed for short manual te
 
 ## Next Steps For AI Auto-Framing
 
-The current app includes an AI Follow beta:
-
-- CameraX `ImageAnalysis` receives preview frames while recording.
-- ML Kit Pose Detection estimates body landmarks on-device.
-- If landmarks approach the frame edge, the app lowers CameraX digital zoom to keep more of the dancer visible.
-- If the dancer is centered and far away, the app can gently zoom in.
-- The normal recording and internal playback-audio muxing path remains unchanged, so the final MP4 still contains the captured background playback audio.
-
-Later versions can add true post-recording reframing:
+AI auto-framing has been removed from the current stability-focused build. Later versions can add true post-recording reframing:
 
 - Analyze the final recording or sampled frames after capture.
 - Estimate dancer position and motion over time.
